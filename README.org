@@ -30,39 +30,47 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
 本プロジェクトで使用する専門語を *AI モデル / パイプライン工程 / ディレクトリ構造 / パラメータ* の 4 章に整理しました。
 
 ** AI モデル・ライブラリ
-- *Demucs* :: Meta Research の source separation モデル。ステム分離を担当。
-- *htdemucs / htdemucs_6s* :: Demucs の改良系列。6s は 6-stems 版。
-- *Basic Pitch* :: Spotify 製の Audio→MIDI 変換モデル。
-- *faster-whisper* :: Whisper 高速推論。word-level timestamps を取得。
-- *music21* :: スコア操作ライブラリ。MusicXML の生成に使用。
-- *MuseScore CLI (mscore)* :: MusicXML → PDF のレンダリングツール。
+| 用語                     | 説明                                                       |
+|--------------------------+------------------------------------------------------------|
+| *Demucs*                 | Meta Research の source separation モデル。ステム分離を担当。 |
+| *htdemucs / htdemucs_6s* | Demucs 改良系列。6s は 6-stems 版。                        |
+| *Basic Pitch*            | Spotify 製の Audio→MIDI 変換モデル。                       |
+| *faster-whisper*         | Whisper 高速推論。word-level timestamps を取得。            |
+| *music21*                | スコア操作ライブラリ。MusicXML 生成に使用。                 |
+| *MuseScore CLI (mscore)* | MusicXML → PDF のレンダリングツール。                      |
 
 ** パイプライン工程
-- *正規化 (normalize)* :: ffmpeg による音源フォーマット統一（44.1kHz / stereo / s16）。
-- *ステム分離* :: Demucs により楽器別チャンネルへ分離。
-- *アンサンブル (ensemble)* :: 複数モデルの出力を median / trimmed mean で統合。
-- *trimmed mean (tmean)* :: 外れ値を除外した平均。
-- *ASR* :: faster-whisper による歌詞抽出。
-- *MusicXML 合成* :: MIDI と歌詞 JSON を music21 で統合。
+| 工程名                  | 説明                                                              |
+|-------------------------+-------------------------------------------------------------------|
+| *正規化 (normalize)*    | ffmpeg による音源フォーマット統一（44.1kHz / stereo / s16）。      |
+| *ステム分離*            | Demucs により楽器別チャンネルへ分離。                             |
+| *アンサンブル (ensemble)* | 複数モデルの出力を median / trimmed mean で統合。                  |
+| *trimmed mean (tmean)*  | 外れ値を除外した平均。                                           |
+| *ASR*                   | faster-whisper による歌詞抽出。                                  |
+| *MusicXML 合成*          | MIDI と歌詞 JSON を music21 で統合。                             |
 
 ** ディレクトリ構造
-- *env/common/* :: 共通スクリプト・依存ファイル。
-- *env/{macOS,wsl2,docker}/* :: 環境別セットアップ・実行。
-- *input/* :: 入力音源。
-- *out/tmp_audio/* :: 正規化された音源。
-- *out/stems/* :: Demucs の生ステム。
-- *out/stems_ens/* :: アンサンブルされたステム。
-- *out/midi/* :: Basic Pitch の MIDI。
-- *out/lyrics/* :: faster-whisper の JSON。
-- *out/score/* :: MusicXML と PDF。
+| ディレクトリ                | 内容                                    |
+|----------------------------+-----------------------------------------|
+| *env/common/*              | 共通スクリプト・依存ファイル。          |
+| *env/{macOS,wsl2,docker}/* | 環境別セットアップ・実行。              |
+| *input/*                   | 入力音源。                              |
+| *out/tmp_audio/*           | 正規化された音源。                      |
+| *out/stems/*               | Demucs の生ステム。                     |
+| *out/stems_ens/*           | アンサンブル済ステム。                  |
+| *out/midi/*                | Basic Pitch の MIDI。                   |
+| *out/lyrics/*              | faster-whisper の JSON。                |
+| *out/score/*               | MusicXML と PDF。                       |
 
 ** パラメータ
-- *MODELS* :: Demucs に使用するモデル名の一覧。
-- *ENSEMBLE_METHOD* :: median / tmean。
-- *TMEAN_ALPHA* :: trimmed mean のカット割合。
-- *MSCORE_BIN* :: MuseScore CLI のパス。
-- *ASR_SRC* :: ASR に使用する WAV（通常は vocals）。
-- *LYRICS_JSON* :: 歌詞 JSON の出力パス。
+| パラメータ名         | 内容                                                     |
+|----------------------+----------------------------------------------------------|
+| *MODELS*             | Demucs に使用するモデル名の一覧。                       |
+| *ENSEMBLE_METHOD*    | median / tmean。                                         |
+| *TMEAN_ALPHA*        | trimmed mean のカット割合。                              |
+| *MSCORE_BIN*         | MuseScore CLI のパス。                                   |
+| *ASR_SRC*            | ASR に使用する WAV（通常は vocals）。                    |
+| *LYRICS_JSON*        | 歌詞 JSON の出力パス。                                   |
 
 * 想定ディレクトリ構成
 
@@ -117,7 +125,7 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
     M --> N[PDF Score]
 #+end_src
 
-* 共通環境（env/common）
+* 共通環境: env/common
 
 ** requirements.txt
 #+begin_src conf :tangle env/common/requirements.txt
@@ -523,7 +531,8 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
       main()
 #+end_src
 
-* macOS: env/macOS/Makefile
+* macOS: env/macOS
+** Makefile
 #+begin_src makefile :tangle env/macOS/Makefile
   VENV := .venv
   PY   := $(VENV)/bin/python
@@ -552,7 +561,8 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   	bash ../common/scripts/process.sh "../input/$(AUDIO)"
 #+end_src
 
-* WSL2: env/wsl2/Makefile
+* WSL2
+** Makefile
 #+begin_src makefile :tangle env/wsl2/Makefile
   VENV := .venv
   PY   := $(VENV)/bin/python
@@ -578,8 +588,8 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   	ENSEMBLE_METHOD=median \
   	bash ../common/scripts/process.sh "../input/$(AUDIO)"
 #+end_src
-
-* Docker: Dockerfile
+* Docker
+** Dockerfile
 #+begin_src dockerfile :tangle env/docker/Dockerfile
   FROM python:3.10-slim
 
@@ -600,7 +610,7 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   ENTRYPOINT ["/opt/music2score/env/common/scripts/process.sh"]
 #+end_src
 
-* Docker: Makefile
+** Makefile
 #+begin_src makefile :tangle env/docker/Makefile
   IMAGE := music2score
   AUDIO ?= foo.wav
@@ -615,7 +625,7 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   	  $(IMAGE) /input/$(AUDIO)
 #+end_src
 
-* Docker: docker-compose.yml
+** docker-compose.yml
 #+begin_src yaml :tangle env/docker/docker-compose.yml
   services:
     music2score:
