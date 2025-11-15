@@ -109,20 +109,20 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
 ** フローチャート
 #+begin_src mermaid
   flowchart TD
-    A[Input Audio] --> B[Normalize<br/>ffmpeg]
-    B --> C[Demucs<br/>Model 1..N]
-    C --> D[Ensemble<br/>median/tmean]
-    D --> E[Stems<br/>vocals,bass,...]
-    E --> F[Basic Pitch<br/>MIDI]
-    F --> G[MIDI Files]
-    E --> H[ASR Input Select]
-    H --> I[faster-whisper]
-    I --> J[Lyrics JSON]
-    G --> K[music21 Score Build]
+    A["Input Audio"] --> B["Normalize<br/>ffmpeg"]
+    B --> C["Demucs<br/>Model 1..N"]
+    C --> D["Ensemble<br/>median/tmean"]
+    D --> E["Stems<br/>vocals,bass,..."]
+    E --> F["Basic Pitch<br/>MIDI"]
+    F --> G["MIDI Files"]
+    E --> H["ASR Input Select"]
+    H --> I["faster-whisper"]
+    I --> J["Lyrics JSON"]
+    G --> K["music21 Score Build"]
     J --> K
-    K --> L[MusicXML]
-    L --> M[MuseScore CLI (optional)]
-    M --> N[PDF Score]
+    K --> L["MusicXML"]
+    L --> M["MuseScore CLI (optional)"]
+    M --> N["PDF Score"]
 #+end_src
 
 * 共通環境: env/common
@@ -644,15 +644,15 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
 ** データフロー（directory-level）
 #+begin_src mermaid
   flowchart LR
-    A[input/foo.wav] --> B[tmp_audio]
-    B --> C[stems]
-    C --> D[stems_ens]
-    D --> E[midi]
-    D --> F[ASR src]
-    F --> G[lyrics JSON]
-    E --> H[MusicXML]
+    A["input/foo.wav"] --> B["tmp_audio"]
+    B --> C["stems"]
+    C --> D["stems_ens"]
+    D --> E["midi"]
+    D --> F["ASR src"]
+    F --> G["lyrics JSON"]
+    E --> H["MusicXML"]
     G --> H
-    H --> I[PDF]
+    H --> I["PDF"]
 #+end_src
 
 ** シーケンス図（macOS 例）
@@ -660,13 +660,13 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   sequenceDiagram
     participant User
     participant Make
-    participant SH as process.sh
-    participant Dem as demucs
-    participant Ens as ensemble
-    participant BP as basic-pitch
-    participant ASR
-    participant XML
-    participant MS as mscore
+    participant SH as "process.sh"
+    participant Dem as "demucs"
+    participant Ens as "ensemble"
+    participant BP as "basic-pitch"
+    participant ASR as "ASR"
+    participant XML as "XML builder"
+    participant MS as "mscore"
 
     User->>Make: make run
     Make->>SH: process.sh foo.wav
