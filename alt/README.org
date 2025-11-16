@@ -1,0 +1,513 @@
+#+TITLE: audio2score: Audio → MIDI → MusicXML → PDF pipeline
+#+AUTHOR: YAMASHITA, Takao
+#+LANGUAGE: ja
+#+OPTIONS: toc:t num:t
+#+PROPERTY: header-args :noweb no-export :mkdirp yes
+
+* プロジェクト概要
+
+本プロジェクトは、*音源ファイルから自動的に楽譜を生成する再現可能なパイプライン* を構築することを目的としています。
+
+- 入力: 単一のモノラル音源ファイル（例: =input.wav=）
+- 出力:
+  - 正規化済み音源 (=input.normalized.wav=)
+  - 自動採譜された MIDI (=build/input.normalized_basic_pitch.mid=)
+  - MIDI から生成した MusicXML (=build/input.normalized_basic_pitch.musicxml=)
+  - MusicXML から生成した PDF (=build/input.normalized_basic_pitch.pdf=; MuseScore が安定動作した場合)
+
+中核は Python スクリプト =audio2score.py= で、Org Babel の =:tangle= によって本 README.org から生成されます。
+ビルド・実行は Makefile 経由で行い、*macOS + pyenv 3.10 系* を前提とします。
+
+* 環境と依存関係
+
+** OS / ランタイム
+
+- OS: macOS
+- Python: pyenv による 3.10 系（例: 3.10.14）
+- 仮想環境: =python -m venv .venv=
+
+** Python パッケージと requirements.txt
+
+Python パッケージは =requirements.txt= で管理し、Org から =:tangle= で生成します。
+
+#+begin_src text :tangle requirements.txt
+basic-pitch
+music21
+librosa
+soundfile
+#+end_src
+
+- =basic-pitch=
+  - Spotify の Automatic Music Transcription ライブラリ。
+    PyPI では Python 3.10 / macOS 対応が公式に明記されています。
+- =music21=
+  - 楽譜解析・生成用ツールキット。MusicXML 入出力をサポートします。
+- =librosa=
+  - オーディオ前処理（ロード・リサンプリングなど）用。PyPI / 公式ドキュメントから、pip 経由のインストールが推奨されています。
+- =soundfile=
+  - WAV 書き出し用（libsndfile バインディング）。
+
+*バージョン固定について*
+
+ここではシンプルにパッケージ名のみ記載しています。
+特定環境での完全再現性を確保したい場合は
+
+1. 仮想環境を構築してこの requirements.txt でインストール
+2. 動作確認後に =pip freeze > requirements.txt= でロックファイル化
+
+という運用を推奨します（ロック後の内容はユーザ環境依存になるため、ここでは明示しません）。
+
+** 外部ツール
+
+- *MuseScore 4*（GUI + CLI）
+  - バイナリ: =/Applications/MuseScore 4.app/Contents/MacOS/mscore=
+  - CLI コマンド名: =mscore=
+  - PATH に =mscore= を通すために、例として以下のような symlink を推奨:
+
+    #+begin_src sh
+      ln -s "/Applications/MuseScore 4.app/Contents/MacOS/mscore" \
+        /opt/homebrew/bin/mscore
+    #+end_src
+
+- 将来的な代替候補（本 README では未使用）
+  - LilyPond + =musicxml2ly=
+  - Verovio
+
+* ファイル構成
+
+想定する最小構成は以下の通りです。
+
+- =README.org= :: 本ファイル。Org Babel から =audio2score.py= / =Makefile= / =requirements.txt= を =:tangle= で生成。
+- =audio2score.py= :: 音源 → MIDI → MusicXML → PDF のメインスクリプト（Org から生成）。
+- =Makefile= :: セットアップおよび実行用ターゲット（Org から生成）。
+- =requirements.txt= :: Python 依存パッケージ一覧（Org から生成）。
+- =input.wav= :: 入力音源（ユーザが用意）。
+- =build/= :: 生成物出力ディレクトリ。
+
+* 処理パイプラインの概要
+
+パイプラインは 4 ステージに分割されます。
+
+1. *前処理（preprocess_audio）*
+   - 入力音源を読み込み、モノラル化・リサンプリング（既定: 22050 Hz）・ピーク正規化（最大振幅 = 0.95）を実施。
+   - 出力: =input.normalized.wav=
+   - 22050 Hz へのリサンプリングは、Basic Pitch の公式説明でも内部処理として用いられているサンプリングレートと整合しています。
+
+2. *自動採譜（run_basic_pitch）*
+   - Basic Pitch で normalized WAV から単一トラックの MIDI を生成。
+   - 出力: =build/input.normalized_basic_pitch.mid=
+   - Basic Pitch は、同名ファイルが存在すると上書きを拒否して OSError を投げるため、
+     - スクリプト側で実行前に =*_basic_pitch.*= を削除してから実行。
+
+3. *MIDI → MusicXML*
+   - *優先*: MuseScore CLI (=mscore=) に MIDI を渡して MusicXML を生成。
+     例: =mscore input.mid -o output.musicxml=
+   - *フォールバック*: MuseScore が利用できない／失敗した場合は、music21 で MIDI をパースし、
+     =Score.write("musicxml")= によって MusicXML を生成。
+
+4. *MusicXML → PDF*
+   - MuseScore CLI で =.musicxml= から PDF を生成。
+   - MuseScore のクラッシュ（SIGSEGV 等）や CLI 失敗時は、
+     - 処理全体は止めず、stderr に WARNING を出して PDF 生成のみスキップ。
+   - コア成果物として *MIDI / MusicXML* を必須とし、PDF はベストエフォートとみなす。
+
+* コマンド・インタフェース
+
+** audio2score.py のエントリポイント
+
+スクリプトの CLI インタフェースは以下の通りです。
+
+- 必須引数
+  - =audio=: 入力音源ファイル（wav/mp3/flac/m4a 等）
+
+- 主なオプション
+  - =--output-dir OUTDIR=
+    - 生成物を出力するディレクトリ（既定: =build=）
+  - =--musescore-cmd CMD=
+    - MuseScore CLI コマンド（既定: =mscore=）
+    - 環境により =musescore4= 等に変更可能
+  - =--no-pdf=
+    - PDF を生成せず、*MIDI / MusicXML のみ* 生成する。
+  - =--score-only=
+    - *Audio → MIDI（Basic Pitch）をスキップ* し、
+      既に存在する =build/<input>.normalized_basic_pitch.mid= を再利用して
+      MusicXML / PDF のみ生成する。
+
+** 代表的な利用パターン
+
+1. *フルパイプライン（初回）*
+
+   #+begin_src sh
+     python audio2score.py input.wav \
+       --output-dir build \
+       --musescore-cmd mscore
+   #+end_src
+
+   - すべてのステップ（前処理 → Basic Pitch → MusicXML → PDF）を実行。
+
+2. *PDF を生成せず、MusicXML までで止める*
+
+   #+begin_src sh
+     python audio2score.py input.wav \
+       --output-dir build \
+       --no-pdf
+   #+end_src
+
+3. *既に生成した normalized MIDI から MusicXML / PDF のみ再生成*
+
+   #+begin_src sh
+     python audio2score.py input.wav \
+       --output-dir build \
+       --musescore-cmd mscore \
+       --score-only
+   #+end_src
+
+   - 事前にフルパイプライン等で
+     =build/input.normalized_basic_pitch.mid= が生成されている必要があります。
+
+* Makefile による再現性の確保
+
+以下の Makefile は、Org から =:tangle= によって生成されます。
+仮想環境の作成・依存パッケージのインストール・各モードの実行を標準化します。
+
+** Makefile（tangle 対象）
+
+#+begin_src makefile :tangle Makefile
+  VENV := .venv
+  PYTHON_BASE ?= python3
+  PYTHON := $(VENV)/bin/python
+  PIP := $(VENV)/bin/pip
+
+  INPUT ?= input.wav
+  OUTDIR ?= build
+
+  # macOS / MuseScore 用（環境に応じて上書き可）
+  MUSESCORE_CMD ?= mscore
+
+  RUN_ARGS ?=
+
+  .PHONY: all setup score score-full score-no-pdf run clean
+
+  all: setup
+
+  $(VENV)/bin/activate: requirements.txt
+  	$(PYTHON_BASE) -m venv $(VENV)
+  	$(PIP) install --upgrade pip
+  	$(PIP) install -r requirements.txt
+  	touch $(VENV)/bin/activate
+
+  setup: $(VENV)/bin/activate
+
+  # 既存の normalized MIDI を再利用し、MusicXML / PDF のみ生成
+  score: setup
+  	$(PYTHON) audio2score.py $(INPUT) \
+  		--output-dir $(OUTDIR) \
+  		--musescore-cmd $(MUSESCORE_CMD) \
+  		--score-only
+
+  # フルパイプライン（Audio → MIDI → MusicXML → PDF）
+  score-full: setup
+  	$(PYTHON) audio2score.py $(INPUT) \
+  		--output-dir $(OUTDIR) \
+  		--musescore-cmd $(MUSESCORE_CMD)
+
+  # PDF は作らず、MIDI / MusicXML まで
+  score-no-pdf: setup
+  	$(PYTHON) audio2score.py $(INPUT) \
+  		--output-dir $(OUTDIR) \
+  		--musescore-cmd $(MUSESCORE_CMD) \
+  		--no-pdf
+
+  # 任意の追加引数を渡したいときに使う汎用ターゲット
+  run: setup
+  	$(PYTHON) audio2score.py $(INPUT) \
+  		--output-dir $(OUTDIR) \
+  		--musescore-cmd $(MUSESCORE_CMD) \
+  		$(RUN_ARGS)
+
+  clean:
+  	rm -rf $(VENV) $(OUTDIR) *.normalized.wav
+#+end_src
+
+* 実装コード（tangle 対象）
+
+以下が audio2score.py の完全な実装です。
+Org Babel の =:tangle audio2score.py= によってファイルが生成されます。
+
+** audio2score.py
+
+#+begin_src python :tangle audio2score.py
+  #!/usr/bin/env python
+  import argparse
+  import pathlib
+  import subprocess
+  import sys
+  from typing import Optional
+
+  import librosa
+  import numpy as np
+  import soundfile as sf
+  from basic_pitch.inference import predict_and_save
+  from basic_pitch import ICASSP_2022_MODEL_PATH
+  from music21 import converter
+
+
+  def preprocess_audio(input_path: pathlib.Path, target_sr: int = 22050) -> pathlib.Path:
+      """Load audio, convert to mono, resample, normalize, and write to WAV.
+
+      - ステレオ → モノラル
+      - サンプリングレートを target_sr に統一
+      - 振幅正規化（ピーク 0.95）
+      """
+      y, sr = librosa.load(str(input_path), sr=target_sr, mono=True)
+      if y.size == 0:
+          raise ValueError(f"Empty audio after loading: {input_path}")
+      peak = np.max(np.abs(y))
+      if peak > 0:
+          y = 0.95 * y / peak
+      out_path = input_path.with_suffix(".normalized.wav")
+      sf.write(str(out_path), y, target_sr)
+      return out_path
+
+
+  def run_basic_pitch(
+      wav_path: pathlib.Path,
+      output_dir: pathlib.Path,
+  ) -> pathlib.Path:
+      """Run Basic Pitch and return path to generated MIDI file.
+
+      Basic Pitch は、入力音源と同じベース名にサフィックスを付けた .mid を生成する。
+      例: input.normalized.wav → build/input.normalized_basic_pitch.mid
+      """
+      output_dir.mkdir(parents=True, exist_ok=True)
+
+      stem = wav_path.stem  # 例: "input.normalized"
+
+      # Basic Pitch が生成する既存ファイルがあると OSError を投げてスキップするので、
+      # 実行前に掃除しておく。
+      for ext in ("mid", "npz", "csv", "wav"):
+          p = output_dir / f"{stem}_basic_pitch.{ext}"
+          if p.exists():
+              p.unlink()
+
+      # Basic Pitch 実行
+      predict_and_save(
+          audio_path_list=[str(wav_path)],
+          output_directory=str(output_dir),
+          save_midi=True,
+          sonify_midi=False,
+          save_model_outputs=False,
+          save_notes=False,  # ノート CSV は使わない
+          model_or_model_path=ICASSP_2022_MODEL_PATH,
+      )
+
+      # 出力された .mid を探す（通常は <stem>_basic_pitch.mid）
+      preferred = output_dir / f"{stem}_basic_pitch.mid"
+      if preferred.exists():
+          midi_path = preferred
+      else:
+          candidates = sorted(output_dir.glob(f"{stem}*.mid"))
+          if not candidates:
+              raise FileNotFoundError(
+                  f"Expected MIDI file for {wav_path} not found under {output_dir}. "
+                  f"(tried '{preferred.name}' and pattern '{stem}*.mid')"
+              )
+          midi_path = candidates[0]
+
+      return midi_path
+
+
+  def run_musescore_convert(
+      input_path: pathlib.Path,
+      output_path: pathlib.Path,
+      musescore_cmd: str,
+  ) -> bool:
+      """汎用 MuseScore CLI ラッパー: 1 ファイル変換を行う。
+
+      - 成功: True を返す
+      - 失敗: WARNING を表示して False を返す
+      """
+      cmd = [musescore_cmd, "-o", str(output_path), str(input_path)]
+      print(f"[INFO] Running MuseScore CLI: {' '.join(cmd)}", file=sys.stderr)
+      try:
+          subprocess.run(cmd, check=True)
+      except FileNotFoundError as exc:
+          print(
+              f"[WARNING] MuseScore command '{musescore_cmd}' not found; "
+              f"skip conversion {input_path} → {output_path}. ({exc})",
+              file=sys.stderr,
+          )
+          return False
+      except subprocess.CalledProcessError as exc:
+          # SIGSEGV を含む MuseScore 側のクラッシュもここに入る
+          print(
+              f"[WARNING] MuseScore CLI failed (exit={exc.returncode}) "
+              f"when converting {input_path} → {output_path}; skip this conversion.",
+              file=sys.stderr,
+          )
+          return False
+      return True
+
+
+  def midi_to_musicxml(
+      midi_path: pathlib.Path,
+      musicxml_path: pathlib.Path,
+      musescore_cmd: str,
+  ) -> pathlib.Path:
+      """MIDI → MusicXML を生成する。
+
+      優先:
+        1. MuseScore CLI に MIDI を直接渡して MusicXML を生成
+        2. 失敗した場合は music21 にフォールバックして MusicXML を生成
+      """
+      # 1. まず mscore に MIDI を渡す
+      if run_musescore_convert(midi_path, musicxml_path, musescore_cmd):
+          return musicxml_path
+
+      # 2. ダメなら music21 でフォールバック
+      print(
+          "[INFO] Falling back to music21 for MIDI → MusicXML conversion.",
+          file=sys.stderr,
+      )
+      score = converter.parse(str(midi_path))
+      score.write("musicxml", fp=str(musicxml_path))
+      return musicxml_path
+
+
+  def musicxml_to_pdf(
+      musicxml_path: pathlib.Path,
+      pdf_path: pathlib.Path,
+      musescore_cmd: str,
+  ) -> Optional[pathlib.Path]:
+      """MusicXML → PDF を MuseScore CLI で行う。
+
+      - 失敗してもパイプライン全体は止めず、None を返すだけ。
+      """
+      ok = run_musescore_convert(musicxml_path, pdf_path, musescore_cmd)
+      if not ok:
+          return None
+      return pdf_path
+
+
+  def main(argv: Optional[list[str]] = None) -> int:
+      parser = argparse.ArgumentParser(
+          description=(
+              "Audio → MIDI → MusicXML → PDF pipeline using Basic Pitch, music21, and MuseScore.\n"
+              "通常:\n"
+              "  audio2score.py input.wav --output-dir build\n"
+              "既存の normalized MIDI (build/input.normalized_basic_pitch.mid) から "
+              "MusicXML / PDF だけ作る:\n"
+              "  audio2score.py input.wav --output-dir build --score-only\n"
+          )
+      )
+      parser.add_argument("audio", help="Input audio file (wav/mp3/flac/m4a, etc.)")
+      parser.add_argument(
+          "--backend",
+          default="basic-pitch",
+          choices=["basic-pitch"],
+          help="Transcription backend (currently only 'basic-pitch').",
+      )
+      parser.add_argument(
+          "--output-dir",
+          type=str,
+          default="build",
+          help="Directory where MIDI / MusicXML / PDF will be written.",
+      )
+      parser.add_argument(
+          "--musescore-cmd",
+          type=str,
+          default="mscore",
+          help="MuseScore CLI command (e.g., 'mscore', 'musescore4').",
+      )
+      parser.add_argument(
+          "--no-pdf",
+          action="store_true",
+          help="Do not generate PDF (only MIDI and MusicXML).",
+      )
+      parser.add_argument(
+          "--score-only",
+          action="store_true",
+          help=(
+              "既に Basic Pitch によって生成された normalized MIDI "
+              "（build/<input>.normalized_basic_pitch.mid）を再利用し、"
+              "MusicXML / PDF だけを生成する。"
+              "Audio → MIDI 推論は行わない。"
+          ),
+      )
+      args = parser.parse_args(argv)
+
+      input_path = pathlib.Path(args.audio).expanduser().resolve()
+      if not input_path.exists():
+          raise SystemExit(f"Input audio not found: {input_path}")
+
+      output_dir = pathlib.Path(args.output_dir).expanduser().resolve()
+      output_dir.mkdir(parents=True, exist_ok=True)
+
+      normalized: Optional[pathlib.Path] = None
+      midi_path: pathlib.Path
+
+      if args.score_only:
+          # Audio → MIDI は既に完了している前提。
+          # input.wav → input.normalized.wav → build/input.normalized_basic_pitch.mid
+          normalized = input_path.with_suffix(".normalized.wav")
+          stem = normalized.stem  # 例: "input.normalized"
+          candidate = output_dir / f"{stem}_basic_pitch.mid"
+          if not candidate.exists():
+              raise SystemExit(
+                  f"Expected normalized MIDI not found: {candidate}\n"
+                  "先に full パイプラインで normalized MIDI を生成してください。\n"
+                  "例: audio2score.py input.wav --output-dir build"
+              )
+          midi_path = candidate
+      else:
+          # 1. 前処理 (Audio → normalized WAV)
+          normalized = preprocess_audio(input_path)
+          # 2. Audio → MIDI (Basic Pitch)
+          midi_path = run_basic_pitch(normalized, output_dir)
+
+      # 3. MIDI → MusicXML（優先: MuseScore / フォールバック: music21）
+      musicxml_path = output_dir / f"{midi_path.stem}.musicxml"
+      midi_to_musicxml(midi_path, musicxml_path, musescore_cmd=args.musescore_cmd)
+
+      # 4. MusicXML → PDF（MuseScore、失敗したらスキップ）
+      pdf_path: Optional[pathlib.Path] = None
+      if not args.no_pdf:
+          pdf_path = musicxml_to_pdf(
+              musicxml_path,
+              output_dir / f"{midi_path.stem}.pdf",
+              musescore_cmd=args.musescore_cmd,
+          )
+
+      print("=== Audio to score conversion completed ===")
+      print(f"Input audio : {input_path}")
+      if normalized is not None:
+          print(f"Normalized  : {normalized}")
+      print(f"MIDI        : {midi_path}")
+      print(f"MusicXML    : {musicxml_path}")
+      if pdf_path is not None:
+          print(f"PDF         : {pdf_path}")
+      else:
+          print("PDF         : (not generated)")
+
+      return 0
+
+
+  if __name__ == "__main__":
+      raise SystemExit(main())
+#+end_src
+
+* 設計上の注意点と制約
+
+- Basic Pitch
+  - Basic Pitch 自体は、Python 3.10 / macOS での利用が公式にサポートされています。
+  - モデル backend（TFLite / ONNX / TensorFlow）は環境に応じて自動選択されますが、
+    本パイプラインではデフォルト構成で動作することを前提としています。
+- MuseScore CLI
+  - macOS + MuseScore 4.x の組み合わせでは、Export（PDF / オーディオ）で SIGSEGV を含むクラッシュ報告が存在します。
+  - 本スクリプトでは *MuseScore 側の失敗でパイプライン全体が止まらない* ように設計し、
+    - MIDI / MusicXML までの生成を *必ず* 成果物として確保
+    - PDF 生成はベストエフォートとして WARNING で握りつぶす
+- 精度について
+  - 採譜精度は Basic Pitch モデルと前処理条件に依存し、*100% の浄書結果は保証されません*。
+  - 実務利用では、生成された MusicXML / PDF を楽譜ソフト（MuseScore, Dorico, Finale 等）で開き、
+    人手での微修正を前提とすることを想定しています。

@@ -1,0 +1,4 @@
+basic-pitch
+music21
+librosa
+soundfile
