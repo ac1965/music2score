@@ -11,7 +11,7 @@ PIP := $(VENV)/bin/pip
 # - 例: ../env/input/どこにいるのだろう.aifc
 INPUT ?= input.wav
 
-OUTDIR ?= build
+OUTDIR ?= out
 
 # ファイル名部分だけ抜き出して WAV を生成
 BASENAME := $(basename $(notdir $(INPUT)))
@@ -40,7 +40,7 @@ $(OUTDIR):
 # 任意形式 → WAV への変換ステップ（ffmpeg 必須）
 # 例:
 #   INPUT = ../env/input/どこにいるのだろう.aifc
-#   → WAV_INPUT = build/どこにいるのだろう.wav
+#   → WAV_INPUT = out/どこにいるのだろう.wav
 $(WAV_INPUT): $(OUTDIR) $(INPUT)
 	ffmpeg -y -i "$(INPUT)" -ac 1 -ar 44100 "$(WAV_INPUT)"
 
