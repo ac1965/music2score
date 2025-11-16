@@ -8,8 +8,6 @@ from typing import Optional
 import librosa
 import numpy as np
 import soundfile as sf
-from basic_pitch.inference import predict_and_save
-from basic_pitch import ICASSP_2022_MODEL_PATH
 from music21 import converter
 
 
@@ -38,11 +36,23 @@ def run_basic_pitch(
     """Run Basic Pitch and return path to generated MIDI file.
 
     Basic Pitch は、入力音源と同じベース名にサフィックスを付けた .mid を生成する。
-    例: input.normalized.wav → build/input.normalized_basic_pitch.mid
+    例: build/foo.normalized.wav → build/foo.normalized_basic_pitch.mid
     """
+    # ★ ここで初めて Basic Pitch を import（--score-only ではこの関数自体が呼ばれない）
+    try:
+        from basic_pitch.inference import predict_and_save
+        from basic_pitch import ICASSP_2022_MODEL_PATH
+    except Exception as exc:  # ImportError でも NameError でもまとめて捕捉
+        raise RuntimeError(
+            "Basic Pitch (basic_pitch) をインポートできなかったため、"
+            "Audio→MIDI ステップを実行できません。\n"
+            "・Audio→MIDI が不要な場合は --score-only を使ってください。\n"
+            "・フルパイプラインを使う場合は basic_pitch のインストール／バージョンを確認してください。"
+        ) from exc
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = wav_path.stem  # 例: "input.normalized"
+    stem = wav_path.stem  # 例: "foo.normalized"
 
     # Basic Pitch が生成する既存ファイルがあると OSError を投げてスキップするので、
     # 実行前に掃除しておく。
@@ -155,13 +165,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         description=(
             "Audio → MIDI → MusicXML → PDF pipeline using Basic Pitch, music21, and MuseScore.\n"
             "通常:\n"
-            "  audio2score.py input.wav --output-dir build\n"
-            "既存の normalized MIDI (build/input.normalized_basic_pitch.mid) から "
+            "  audio2score.py build/foo.wav --output-dir build\n"
+            "既存の normalized MIDI (build/foo.normalized_basic_pitch.mid) から "
             "MusicXML / PDF だけ作る:\n"
-            "  audio2score.py input.wav --output-dir build --score-only\n"
+            "  audio2score.py build/foo.wav --output-dir build --score-only\n"
         )
     )
-    parser.add_argument("audio", help="Input audio file (wav/mp3/flac/m4a, etc.)")
+    parser.add_argument("audio", help="Input WAV file (produced by ffmpeg etc.)")
     parser.add_argument(
         "--backend",
         default="basic-pitch",
@@ -190,7 +200,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help=(
             "既に Basic Pitch によって生成された normalized MIDI "
-            "（build/<input>.normalized_basic_pitch.mid）を再利用し、"
+            "（build/<name>.normalized_basic_pitch.mid）を再利用し、"
             "MusicXML / PDF だけを生成する。"
             "Audio → MIDI 推論は行わない。"
         ),
@@ -209,19 +219,19 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.score_only:
         # Audio → MIDI は既に完了している前提。
-        # input.wav → input.normalized.wav → build/input.normalized_basic_pitch.mid
+        # build/foo.wav → build/foo.normalized.wav → build/foo.normalized_basic_pitch.mid
         normalized = input_path.with_suffix(".normalized.wav")
-        stem = normalized.stem  # 例: "input.normalized"
+        stem = normalized.stem  # 例: "foo.normalized"
         candidate = output_dir / f"{stem}_basic_pitch.mid"
         if not candidate.exists():
             raise SystemExit(
                 f"Expected normalized MIDI not found: {candidate}\n"
                 "先に full パイプラインで normalized MIDI を生成してください。\n"
-                "例: audio2score.py input.wav --output-dir build"
+                "例: audio2score.py build/foo.wav --output-dir build"
             )
         midi_path = candidate
     else:
-        # 1. 前処理 (Audio → normalized WAV)
+        # 1. 前処理 (Audio WAV → normalized WAV)
         normalized = preprocess_audio(input_path)
         # 2. Audio → MIDI (Basic Pitch)
         midi_path = run_basic_pitch(normalized, output_dir)

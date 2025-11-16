@@ -1,0 +1,7 @@
+#!/Users/ac1965/Documents/devel/repos/music2score/alt/.venv/bin/python
+import sys
+from mido.scripts.mido_play import main
+if __name__ == '__main__':
+    if sys.argv[0].endswith('.exe'):
+        sys.argv[0] = sys.argv[0][:-4]
+    sys.exit(main())
