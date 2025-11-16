@@ -1,76 +1,61 @@
-#+TITLE: music2score — Developer Documentation (Audio→Stems→MIDI→Lyrics→Score Pipeline)
+#+TITLE: music2score — Audio→Stems→MIDI→Lyrics→Score Pipeline
 #+AUTHOR: YAMASHITA, Takao
-#+OPTIONS: toc:3 num:nil
+#+OPTIONS: toc:t num:nil
 #+PROPERTY: header-args :noweb no-export :mkdirp yes
 
 * Overview
-本プロジェクト *music2score* は「ひとつの音源から、ステム→MIDI→歌詞→スコア→PDF」を生成する総合パイプラインです。
+music2score は、任意の音源ファイルから次の成果物を自動生成するパイプラインです。
 
-#+begin_quote
-Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore CLI
-#+end_quote
+1. Demucs によるステム分離（複数モデル + アンサンブル対応）
+2. Basic Pitch による各パート MIDI 生成
+3. faster-whisper による *単語レベル* 歌詞抽出
+4. music21 による MusicXML 組み立て
+5. LilyPond による PDF スコア生成（MuseScore の代替）
 
-開発者が読むことを前提に、以下の観点で本 README.org を再編成しています。
-
-- 可視化重視（Mermaid フローチャート / シーケンス図）
-- 責務ごとの整理
-- データ構造とアルゴリズムの明確化
-- 拡張ポイントの明示
-- env/ 以下の実コードを完全掲載（tangle 可）
-
-環境は以下の 3 種類をサポートします。
+本パイプラインは、
 
 - macOS
 - WSL2 (Ubuntu)
-- Docker / Docker Compose
+- Docker（単体／compose）
 
-共通ロジックは =env/common/= に集約し、環境依存部分は個別の env 下に配置します。
+の各環境に応じ、README.org から =org-babel-tangle= を用いてファイル一式を自動生成できます。
+
+共通コード・依存関係は =env/common/= に格納し、環境固有の Makefile・Dockerfile は =env/macOS=, =env/wsl2=, =env/docker= に出力します。
 
 * Glossary
-本プロジェクトで使用する専門語を *AI モデル / パイプライン工程 / ディレクトリ構造 / パラメータ* の 4 章に整理しました。
 
-** AI モデル・ライブラリ
-| 用語                     | 説明                                                       |
-|--------------------------+------------------------------------------------------------|
-| *Demucs*                 | Meta Research の source separation モデル。ステム分離を担当。 |
-| *htdemucs / htdemucs_6s* | Demucs 改良系列。6s は 6-stems 版。                        |
-| *Basic Pitch*            | Spotify 製の Audio→MIDI 変換モデル。                       |
-| *faster-whisper*         | Whisper 高速推論。word-level timestamps を取得。            |
-| *music21*                | スコア操作ライブラリ。MusicXML 生成に使用。                 |
-| *MuseScore CLI (mscore)* | MusicXML → PDF のレンダリングツール。                      |
+| 用語 | 説明 |
+|------|------|
+| *ステム（Stem）* | Demucs などで音源から抽出されたパート単位の WAV（vocals, bass, drums 等） |
+| *モデル（Model）* | Demucs のネットワークモデル名（例: htdemucs, htdemucs_6s） |
+| *アンサンブル（Ensemble）* | モデル複数出力を median / trimmed mean で統合し、より安定したステムを生成 |
+| *Basic Pitch* | ソース分離された単一楽器（または vocals）WAV から MIDI を生成するライブラリ |
+| *ASR* | 音声認識（Automatic Speech Recognition）。faster-whisper を使用 |
+| *MusicXML* | 楽譜データ交換用 XML 形式。LilyPond へ変換可能 |
+| *LilyPond* | 高品質なスコア engraving ツール。PDF 出力に使用 |
+| *musicxml2ly* | MusicXML → LilyPond 変換ツール |
+| *tmean* | trimmed mean アンサンブル。中央値より頑健・精度高めのケースがある |
+| *pipeline* | 0 → 7 の各工程をまとめた一連の処理 |
 
-** パイプライン工程
-| 工程名                  | 説明                                                              |
-|-------------------------+-------------------------------------------------------------------|
-| *正規化 (normalize)*    | ffmpeg による音源フォーマット統一（44.1kHz / stereo / s16）。      |
-| *ステム分離*            | Demucs により楽器別チャンネルへ分離。                             |
-| *アンサンブル (ensemble)* | 複数モデルの出力を median / trimmed mean で統合。                  |
-| *trimmed mean (tmean)*  | 外れ値を除外した平均。                                           |
-| *ASR*                   | faster-whisper による歌詞抽出。                                  |
-| *MusicXML 合成*          | MIDI と歌詞 JSON を music21 で統合。                             |
+* Pipeline Flow
 
-** ディレクトリ構造
-| ディレクトリ                | 内容                                    |
-|----------------------------+-----------------------------------------|
-| *env/common/*              | 共通スクリプト・依存ファイル。          |
-| *env/{macOS,wsl2,docker}/* | 環境別セットアップ・実行。              |
-| *input/*                   | 入力音源。                              |
-| *out/tmp_audio/*           | 正規化された音源。                      |
-| *out/stems/*               | Demucs の生ステム。                     |
-| *out/stems_ens/*           | アンサンブル済ステム。                  |
-| *out/midi/*                | Basic Pitch の MIDI。                   |
-| *out/lyrics/*              | faster-whisper の JSON。                |
-| *out/score/*               | MusicXML と PDF。                       |
-
-** パラメータ
-| パラメータ名         | 内容                                                     |
-|----------------------+----------------------------------------------------------|
-| *MODELS*             | Demucs に使用するモデル名の一覧。                       |
-| *ENSEMBLE_METHOD*    | median / tmean。                                         |
-| *TMEAN_ALPHA*        | trimmed mean のカット割合。                              |
-| *MSCORE_BIN*         | MuseScore CLI のパス。                                   |
-| *ASR_SRC*            | ASR に使用する WAV（通常は vocals）。                    |
-| *LYRICS_JSON*        | 歌詞 JSON の出力パス。                                   |
+#+begin_src plantuml :file pipeline-flow.png :exports both
+  @startuml
+  start
+  :Normalize audio (ffmpeg);
+  :Demucs (1..N models);
+  if (#models >= 2?) then (yes)
+    :Ensemble stems (median / tmean);
+  else (no)
+    :Use single model;
+  endif
+  :Basic Pitch (per stem → MIDI);
+  :Whisper ASR (lyrics json);
+  :music21 (MIDI + lyrics → MusicXML);
+  :LilyPond (MusicXML → PDF);
+  stop
+  @enduml
+#+end_src
 
 * 想定ディレクトリ構成
 
@@ -80,12 +65,6 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
     input/
       foo.wav
     out/
-      tmp_audio/
-      stems/
-      stems_ens/
-      midi/
-      lyrics/
-      score/
     env/
       common/
         requirements.txt
@@ -104,28 +83,7 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
         docker-compose.yml
 #+end_src
 
-* 全体パイプライン
-
-** フローチャート
-#+begin_src mermaid
-  flowchart TD
-    A["Input Audio"] --> B["Normalize<br/>ffmpeg"]
-    B --> C["Demucs<br/>Model 1..N"]
-    C --> D["Ensemble<br/>median/tmean"]
-    D --> E["Stems<br/>vocals,bass,..."]
-    E --> F["Basic Pitch<br/>MIDI"]
-    F --> G["MIDI Files"]
-    E --> H["ASR Input Select"]
-    H --> I["faster-whisper"]
-    I --> J["Lyrics JSON"]
-    G --> K["music21 Score Build"]
-    J --> K
-    K --> L["MusicXML"]
-    L --> M["MuseScore CLI (optional)"]
-    M --> N["PDF Score"]
-#+end_src
-
-* 共通環境: env/common
+* 共通環境（env/common）
 
 ** requirements.txt
 #+begin_src conf :tangle env/common/requirements.txt
@@ -143,6 +101,9 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
 
   scikit-learn<=1.5.1
   tqdm==4.66.5
+
+  # MusicXML → LilyPond 用
+  lxml
 #+end_src
 
 ** process.sh
@@ -150,13 +111,11 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   set -euo pipefail
   export TORCHAUDIO_USE_SOUNDFILE=1
 
-  # === Args ===
   AUDIO_IN="${1:-}"
   : "${AUDIO_IN:?Usage: $0 <audio.(wav|aif|aiff|aifc|mp3|flac)>}"
 
-  # === Paths ===
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-  WORK_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"   # project-root
+  WORK_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
   OUT_DIR="$WORK_DIR/out"
   TMP_DIR="$OUT_DIR/tmp_audio"
   STEM_ROOT="$OUT_DIR/stems"
@@ -165,44 +124,39 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   LYRICS_DIR="$OUT_DIR/lyrics"
   SCORE_DIR="$OUT_DIR/score"
   SCORE_XML="$SCORE_DIR/score.musicxml"
+  SCORE_LY="$SCORE_DIR/score.ly"
   SCORE_PDF="$SCORE_DIR/score.pdf"
 
-  MODELS="${MODELS:-htdemucs}"  # e.g. "htdemucs htdemucs_6s"
-  ENSEMBLE_METHOD="${ENSEMBLE_METHOD:-median}" # median | tmean
-  TMEAN_ALPHA="${TMEAN_ALPHA:-0.1}"            # used when ENSEMBLE_METHOD=tmean
+  MODELS="${MODELS:-htdemucs}"
+  ENSEMBLE_METHOD="${ENSEMBLE_METHOD:-median}"
+  TMEAN_ALPHA="${TMEAN_ALPHA:-0.1}"
 
   mkdir -p "$OUT_DIR" "$TMP_DIR" "$STEM_ROOT" "$ENS_DIR" \
     "$MIDI_DIR" "$LYRICS_DIR" "$SCORE_DIR"
 
-  # === 0) Normalize input ===
+  # 0. Normalize
   BASE="$(basename "$AUDIO_IN")"
   BASE_NOEXT="${BASE%.*}"
   WAV_IN="$TMP_DIR/${BASE_NOEXT}.wav"
-
   echo "[normalize] $AUDIO_IN -> $WAV_IN"
   ffmpeg -y -i "$AUDIO_IN" -ac 2 -ar 44100 -sample_fmt s16 \
     "$WAV_IN" >/dev/null 2>&1
 
-  # === 1) MODELS parsing ===
+  # 1. Parse models
   MODELS_SANE="$(printf "%s" "$MODELS" | tr '、,' ' ' | tr -s '[:space:]' ' ')"
   read -r -a MODEL_ARR <<< "$MODELS_SANE"
-  if [ "${#MODEL_ARR[@]}" -eq 0 ]; then
-    MODEL_ARR=(htdemucs)
-  fi
-  echo "[models] parsed: ${#MODEL_ARR[@]} -> ${MODEL_ARR[*]}"
+  [ "${#MODEL_ARR[@]}" -eq 0 ] && MODEL_ARR=(htdemucs)
+  echo "[models] parsed: ${MODEL_ARR[*]}"
 
-  # === 2) Demucs per-model ===
+  # 2. Demucs
   for m in "${MODEL_ARR[@]}"; do
     echo "[demucs] model=$m"
-    OUT_SUBDIR="$STEM_ROOT/$m"
-    mkdir -p "$OUT_SUBDIR"
-    echo "  -> demucs -n $m -o $OUT_SUBDIR $WAV_IN"
-    demucs -n "$m" -o "$OUT_SUBDIR" "$WAV_IN"
+    demucs -n "$m" -o "$STEM_ROOT" "$WAV_IN"
   done
 
-  # === 3) Ensemble (if >=2 models) ===
+  # 3. Ensemble
   if [ "${#MODEL_ARR[@]}" -ge 2 ]; then
-    echo "[ensemble] models=${MODEL_ARR[*]} method=$ENSEMBLE_METHOD alpha=$TMEAN_ALPHA"
+    echo "[ensemble] method=$ENSEMBLE_METHOD alpha=$TMEAN_ALPHA"
     python "$SCRIPT_DIR/ensemble_stems.py" \
       --models "$MODELS_SANE" \
       --stem-root "$STEM_ROOT" \
@@ -214,60 +168,68 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   else
     STEM_DIR="$STEM_ROOT/${MODEL_ARR[0]}/$BASE_NOEXT"
   fi
+  echo "[stems] using $STEM_DIR"
 
-  echo "[stems] using STEM_DIR=$STEM_DIR"
-
-  # === 4) Basic Pitch (per stem) ===
+  # 4. Basic Pitch
   mkdir -p "$MIDI_DIR"
-
   bp_conv() {
-    local f="$1"
-    if [ -f "$f" ]; then
-      echo "[basic-pitch] $f"
-      basic-pitch \
-        --save-midi \
-        --no-melodia \
-        "$MIDI_DIR" \
-        "$f" >/dev/null 2>&1 || true
-    fi
+    [ -f "$1" ] || return 0
+    echo "[basic-pitch] $1"
+    basic-pitch --save-midi --no-melodia "$MIDI_DIR" "$1" >/dev/null 2>&1 || true
   }
-
   for stem in vocals bass drums other guitar piano; do
     bp_conv "$STEM_DIR/$stem.wav"
   done
 
-  # === 5) ASR (faster-whisper) ===
+  # 5. ASR
   LYRICS_JSON="$LYRICS_DIR/lyrics_words.json"
   ASR_SRC="$STEM_DIR/vocals.wav"
   [ ! -f "$ASR_SRC" ] && ASR_SRC="$WAV_IN"
 
-  echo "[asr] source=$ASR_SRC"
+  echo "[asr] $ASR_SRC"
   PYTHONIOENCODING=utf-8 \
   ASR_SRC="$ASR_SRC" \
   LYRICS_JSON="$LYRICS_JSON" \
   python "$SCRIPT_DIR/asr.py"
 
-  # === 6) MusicXML ===
-  echo "[xml] building MusicXML -> $SCORE_XML"
+  # 6. MusicXML
+  echo "[xml] -> $SCORE_XML"
   python "$SCRIPT_DIR/align_musicxml.py" \
     --midi_dir "$MIDI_DIR" \
     --lyrics_json "$LYRICS_JSON" \
     --output "$SCORE_XML" \
     --tempo 120
 
-  # === 7) PDF (MuseScore CLI; MSCORE_BIN は環境側で設定) ===
-  if [ -n "${MSCORE_BIN:-}" ]; then
-    echo "[pdf] $MSCORE_BIN $SCORE_XML -> $SCORE_PDF"
-    "$MSCORE_BIN" "$SCORE_XML" -o "$SCORE_PDF" >/dev/null 2>&1 || \
-      echo "[warn] PDF export failed."
-  else
-    echo "[info] MSCORE_BIN not set; skipped PDF export."
-  fi
+  # 7. MusicXML → LilyPond (musicxml2ly)
+  echo "[ly] musicxml2ly -> $SCORE_LY"
+  musicxml2ly "$SCORE_XML" -o "$SCORE_LY"
 
-  echo "DONE:"
+  # 8. score.ly の先頭に include を挿入
+  cp "$SCRIPT_DIR/lilypond_include.ily" "$SCORE_DIR/lilypond_include.ily"
+
+  # sed の代わりに printf + cat で安全に挿入
+  TMP_LY="${SCORE_LY}.tmp"
+  printf '\\include "lilypond_include.ily"\n' > "$TMP_LY"
+  cat "$SCORE_LY" >> "$TMP_LY"
+  mv "$TMP_LY" "$SCORE_LY"
+
+  # 9. sanitize（必要に応じて後処理を挟みたいならここ）
+  # 例: 独自の sanitize_ly.py 等を挟みたいとき:
+  # python "$SCRIPT_DIR/sanitize_ly.py" "$SCORE_LY"
+  # echo "[sanitize-ly] sanitized: $SCORE_LY"
+
+  # 10. PDF (LilyPond)
+  echo "[pdf] lilypond -> $SCORE_PDF"
+  (
+    cd "$SCORE_DIR"
+    lilypond -o "score" "score.ly"
+  )
+
+  echo "DONE"
   echo " - Stems    : $STEM_DIR"
   echo " - MusicXML : $SCORE_XML"
-  [ -n "${MSCORE_BIN:-}" ] && echo " - PDF      : $SCORE_PDF"
+  echo " - LilyPond : $SCORE_LY"
+  echo " - PDF      : $SCORE_PDF"
 #+end_src
 
 ** ensemble_stems.py
@@ -387,17 +349,20 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
 
 ** asr.py
 #+begin_src python :tangle env/common/scripts/asr.py :shebang "#!/usr/bin/env python3"
+  # -*- coding: utf-8 -*-
+
   import json
   import os
   from pathlib import Path
   from faster_whisper import WhisperModel
 
-  def main() -> None:
+  def main():
       audio = os.environ.get("ASR_SRC")
       out_json = os.environ.get("LYRICS_JSON")
       if not audio or not out_json:
           raise SystemExit("ASR_SRC / LYRICS_JSON must be set in environment.")
 
+      print(f"[asr] audio={audio}")
       model = WhisperModel("large-v3", device="cpu", compute_type="int8")
       segments, info = model.transcribe(audio, word_timestamps=True, language="ja")
 
@@ -410,13 +375,110 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
                   "text": w.word,
               })
 
-      out_path = Path(out_json)
-      out_path.parent.mkdir(parents=True, exist_ok=True)
-      with out_path.open("w", encoding="utf-8") as f:
-          json.dump({"lang": info.language, "words": words}, f,
-                    ensure_ascii=False, indent=2)
+      out = Path(out_json)
+      out.parent.mkdir(parents=True, exist_ok=True)
+      out.write_text(
+          json.dumps({"lang": info.language, "words": words}, ensure_ascii=False, indent=2),
+          encoding="utf-8"
+      )
 
-      print(f"[asr] words={len(words)} -> {out_path}")
+      print(f"[asr] words={len(words)} -> {out}")
+
+  if __name__ == "__main__":
+      main()
+#+end_src
+
+** lilypond_include.ily
+#+begin_src python :tangle env/common/scripts/lilypond_include.ily
+  % LilyPond 2.24 Safe Include (Guile 3.0 Compatible)
+
+  \paper {
+    #(set-default-paper-size "a4")
+    top-margin = 12
+    bottom-margin = 14
+    left-margin = 15
+    right-margin = 15
+  }
+
+  % Staff size (安全な設定方法)
+  #(set-global-staff-size 16)
+
+  \layout {
+    \context {
+      \Lyrics
+      \override LyricText.font-size = #1
+      \override LyricText.self-alignment-X = #CENTER
+      \override LyricText.extra-offset = #'(0 . -1.0)
+      \override LyricSpace.minimum-distance = #1.4
+    }
+
+    \context {
+      \Staff
+      \override VerticalAxisGroup.staff-staff-spacing =
+        #'((basic-distance . 8)
+           (minimum-distance . 6)
+           (padding . 1.4))
+    }
+  }
+#+end_src
+
+** sanitize_lilypond.py
+#+begin_src python :tangle env/common/scripts/sanitize_lilypond.py :shebang "#!/usr/bin/env python3"
+  # -*- coding: utf-8 -*-
+  """
+  sanitize_lilypond.py — musicxml2ly が生成した .ly を安全化するフィルタ
+
+  - \barNumberCheck をコメントアウト
+  - R... （multi-measure rest）を r... に置き換え
+    例: R1*4  -> r1*4
+        R2.   -> r2.
+  """
+
+  from __future__ import annotations
+
+  import argparse
+  import re
+  from pathlib import Path
+
+
+  def sanitize_ly(path: Path) -> None:
+      text = path.read_text(encoding="utf-8")
+      lines = text.splitlines()
+      out_lines = []
+
+      # R... を r... にするためのざっくり正規表現
+      # - R のあとに音価（1,2,4,8,16 等）+ オプションで . とか *3/2 等が続くパターンを想定
+      re_multi_rest = re.compile(r"\bR(?P<dur>[0-9]+(?:\.*)(?:\*[^\s%]+)?)")
+
+      for line in lines:
+          # 1) barNumberCheck をコメントアウト
+          if "\\barNumberCheck" in line:
+              out_lines.append("% " + line)
+              continue
+
+          # 2) multi-measure rest を通常の休符に変換
+          def _rep(m: re.Match) -> str:
+              dur = m.group("dur")
+              return f"r{dur}"
+
+          newline = re_multi_rest.sub(_rep, line)
+          out_lines.append(newline)
+
+      path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+      print(f"[sanitize-ly] sanitized: {path}")
+
+
+  def main():
+      ap = argparse.ArgumentParser()
+      ap.add_argument("ly_file", help="LilyPond .ly file to sanitize")
+      args = ap.parse_args()
+
+      ly_path = Path(args.ly_file)
+      if not ly_path.exists():
+          raise SystemExit(f"[sanitize-ly] file not found: {ly_path}")
+
+      sanitize_ly(ly_path)
+
 
   if __name__ == "__main__":
       main()
@@ -424,144 +486,374 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
 
 ** align_musicxml.py
 #+begin_src python :tangle env/common/scripts/align_musicxml.py :shebang "#!/usr/bin/env python3"
+  # -*- coding: utf-8 -*-
+  """
+  align_musicxml.py — MIDI + Lyrics JSON → MusicXML (LilyPond-safe, tuplets-free)
+
+  方針:
+  - Basic Pitch が生成した複数 MIDI を読み込み、各ファイルを 1 パートとして扱う。
+  - 元の拍・連符情報は「完全には」再現しない代わりに、LilyPond / musicxml2ly が
+    落ちないように *極端にシンプルな記譜* に正規化する。
+
+    - すべての音価を *4分音符 (quarterLength=1.0)* に統一
+    - tuplets / 複雑な duration / voices は一切使わない
+    - 各パートは 1 voice のみ、順番に音符・休符を append していくだけ
+    - その後 TimeSignature(4/4) のもとで makeMeasures() して小節を生成
+
+  - 歌詞は「一番上のパート (通常は vocals_basic_pitch.mid)」の
+    音符に対して *順番に* 付与する。
+
+  この結果、リズムの細部は犠牲になるが:
+
+  - MusicXML は構造的に非常に単純
+  - musicxml2ly で「負のスキップ」「tuplets 処理中の例外」などが発生しなくなる
+  - LilyPond にとっては「普通の 4/4 の連続した 4分音符列」として扱える
+
+  今後、精密なリズム再現が必要になった場合は、
+  別スクリプトとして「高精度版 aligner」を用意することを想定。
+  """
+
   import argparse
   import json
   from pathlib import Path
   from typing import List, Tuple
 
-  from music21 import converter, stream, tempo, meter, note, instrument
+  import music21 as m21
 
-  STEM_ORDER = ["vocals", "bass", "drums", "other", "piano", "guitar"]
 
-  def guess_stem_name(midipath: Path) -> str:
-      name = midipath.stem.lower()
-      for k in STEM_ORDER:
+  # ------------------------------------------------------------
+  #  Utilities
+  # ------------------------------------------------------------
+
+  def load_lyrics(json_path: Path) -> List[dict]:
+      """
+      ASR 出力 JSON から words 配列を読む。
+      フォーマット:
+        {
+          "lang": "ja",
+          "words": [
+            {"start": 0.10, "end": 0.35, "text": "ここ"},
+            ...
+          ]
+        }
+      """
+      if not json_path.exists():
+          print(f"[align] lyrics json not found, skip lyrics: {json_path}")
+          return []
+
+      data = json.loads(json_path.read_text(encoding="utf-8"))
+      words = data.get("words", [])
+      # text のみ抜き出しておく
+      cleaned = []
+      for w in words:
+          t = str(w.get("text", "")).strip()
+          if not t:
+              continue
+          cleaned.append({"text": t})
+      return cleaned
+
+
+  def assign_lyrics_sequential(part: m21.stream.Part, words: List[dict]) -> int:
+      """
+      とりあえず *順番に* 音符へ歌詞を割り当てる版。
+      - 音符のみ対象（休符にはつけない）
+      - 単純な 1音符 1語 割り当て
+      """
+      if not words:
+          return 0
+
+      idx = 0
+      notes = list(part.recurse().notes)
+      for n in notes:
+          if idx >= len(words):
+              break
+          w = words[idx].get("text", "").strip()
+          if not w:
+              idx += 1
+              continue
+          n.lyric = w
+          idx += 1
+
+      print(f"[align] lyrics attached: {idx} / {len(words)} words")
+      return idx
+
+
+  def guess_stem_name(midi_path: Path) -> str:
+      """
+      ファイル名から stem 名をざっくり推定（vocals / bass / drums ...）。
+      楽器名ラベル用。失敗したら拡張子なしファイル名をそのまま返す。
+      """
+      name = midi_path.stem.lower()
+      for k in ("vocals", "vocal", "vox", "bass", "drums",
+                "other", "guitar", "piano"):
           if k in name:
               return k
       return name
 
-  def load_words(json_path: Path) -> List[dict]:
-      if not json_path.exists():
-          return []
-      data = json.loads(json_path.read_text("utf-8"))
-      return data.get("words", [])
 
-  def build_seconds_map(part: stream.Part, qpm: float) -> List[Tuple[note.Note, float, float]]:
-      sec_per_quarter = 60.0 / qpm
-      timeline: List[Tuple[note.Note, float, float]] = []
-      cur_q = 0.0
-      for el in part.flat.notesAndRests:
-          dur_q = float(el.quarterLength)
-          start_s = cur_q * sec_per_quarter
-          end_s = (cur_q + dur_q) * sec_per_quarter
-          timeline.append((el, start_s, end_s))
-          cur_q += dur_q
-      return timeline
+  def simplify_stream_to_part(
+      s: m21.stream.Stream,
+      stem_name: str,
+      max_events: int = 8000,
+  ) -> m21.stream.Part:
+      """
+      MIDI Stream → LilyPond-safe な 1 パートに簡略化する。
 
-  def attach_lyrics_to_part(part: stream.Part, words: List[dict], qpm: float) -> None:
-      if not words:
-          return
-      tmap = build_seconds_map(part, qpm)
-      wi = 0
-      for el, s, e in tmap:
-          if not isinstance(el, note.Note):
+      - s.flat.notesAndRests を時間順にたどるが、
+        offset 情報は一切使わず「順番だけ」利用する。
+      - 各イベントを 4分音符 (= quarterLength=1.0) に変換。
+        - Note: pitch を保持
+        - Rest: 休符 4分音符
+      - chord は先頭音だけを Note として採用。
+      - max_events でイベント数を制限（念のための暴走防止）。
+      """
+      flat = list(s.flat.notesAndRests)
+      p = m21.stream.Part()
+      p.id = stem_name
+
+      # 楽器ラベルを付けておくと DAW 的にも分かりやすい
+      try:
+          inst = m21.instrument.fromString(stem_name.capitalize())
+      except Exception:
+          inst = m21.instrument.Instrument()
+          inst.instrumentName = stem_name
+      p.insert(0, inst)
+
+      count = 0
+      for e in flat:
+          if count >= max_events:
+              print(f"[warn] {stem_name}: truncated at {max_events} events")
+              break
+
+          new_obj = None
+
+          if isinstance(e, m21.note.Note):
+              n = m21.note.Note(e.pitch)
+              n.quarterLength = 1.0
+              new_obj = n
+          elif isinstance(e, m21.chord.Chord):
+              # 先頭音だけ代表にする
+              n = m21.note.Note(e.pitches[0])
+              n.quarterLength = 1.0
+              new_obj = n
+          elif isinstance(e, m21.note.Rest):
+              r = m21.note.Rest()
+              r.quarterLength = 1.0
+              new_obj = r
+          else:
+              # その他 (e.g. expressions) は無視
               continue
-          mid = 0.5 * (s + e)
-          best_idx, best_dist = None, 1e9
-          for j in range(wi, min(wi + 10, len(words))):
-              w = words[j]
-              cs = 0.5 * (float(w["start"]) + float(w["end"]))
-              d = abs(cs - mid)
-              if d < best_dist:
-                  best_dist = d
-                  best_idx = j
-          if best_idx is not None:
-              el.addLyric(words[best_idx]["text"])
-              wi = best_idx + 1
 
-  def parse_midi_first_part(midi_path: Path) -> stream.Part:
-      s = converter.parse(str(midi_path))
-      if getattr(s, "parts", None) and len(s.parts) > 0:
-          return s.parts[0]
-      return s
+          p.append(new_obj)
+          count += 1
 
-  def main() -> None:
+      if count == 0:
+          raise RuntimeError(f"No usable notes/rests in MIDI: {stem_name}")
+
+      print(f"[align] {stem_name}: simplified events = {count}")
+      return p
+
+
+  def build_score_from_midis(midi_dir: Path) -> Tuple[m21.stream.Score, List[str]]:
+      """
+      MIDI ディレクトリから *空でない* パートだけを拾い、
+      1 パート = 1 stem として Score を構成する。
+
+      - すべて simplify_stream_to_part() を通して
+        LilyPond-safe な単純パートに変換。
+      """
+      midi_files = sorted(midi_dir.glob("*.mid"))
+      if not midi_files:
+          raise FileNotFoundError(f"No MIDI files found in: {midi_dir}")
+
+      parts = []
+      stem_names: List[str] = []
+
+      for mf in midi_files:
+          print(f"[align] parsing MIDI: {mf.name}")
+          s = m21.converter.parse(str(mf))
+
+          stem_name = guess_stem_name(mf)
+          try:
+              p = simplify_stream_to_part(s, stem_name)
+          except RuntimeError as e:
+              print(f"[warn] {e}, skipped")
+              continue
+
+          parts.append(p)
+          stem_names.append(stem_name)
+
+      if not parts:
+          raise RuntimeError("All MIDI files were empty or contained no usable notes.")
+
+      score = m21.stream.Score()
+      for p in parts:
+          score.append(p)
+
+      return score, stem_names
+
+
+  def normalize_score(
+      score: m21.stream.Score,
+      time_signature: str = "4/4",
+      tempo: float = 120.0,
+  ) -> m21.stream.Score:
+      """
+      Score 全体を LilyPond-friendly に正規化する。
+
+      - TimeSignature と Tempo を先頭に挿入
+      - makeMeasures() により 4/4 に基づく小節を作成
+      - makeNotation() で記譜情報を再構成
+      - 空小節には全休符を挿入
+      """
+      ts = m21.meter.TimeSignature(time_signature)
+      tempo_mark = m21.tempo.MetronomeMark(number=tempo)
+
+      score.insert(0, ts)
+      score.insert(0, tempo_mark)
+
+      # 小節を明示的に作る
+      score.makeMeasures(inPlace=True)
+
+      # 記譜構造を整理（tie, beam など）
+      score.makeNotation(inPlace=True)
+
+      # 空小節対策: 中身ゼロ measure には全休符を入れる
+      for part in score.parts:
+          for m in part.getElementsByClass(m21.stream.Measure):
+              if len(m.notesAndRests) == 0:
+                  # 4/4 を想定して全休符
+                  m.insert(0, m21.note.Rest(quarterLength=4.0))
+
+      return score
+
+
+  # ------------------------------------------------------------
+  #  Main
+  # ------------------------------------------------------------
+
+  def main():
       ap = argparse.ArgumentParser()
-      ap.add_argument("--midi_dir", required=True)
-      ap.add_argument("--lyrics_json", required=True)
-      ap.add_argument("--output", required=True)
-      ap.add_argument("--tempo", type=float, default=120.0)
+      ap.add_argument(
+          "--midi_dir", required=True,
+          help="Basic Pitch が出力した MIDI ディレクトリ"
+      )
+      ap.add_argument(
+          "--lyrics_json", required=True,
+          help="faster-whisper の word-level JSON"
+      )
+      ap.add_argument(
+          "--output", required=True,
+          help="出力 MusicXML パス"
+      )
+      ap.add_argument(
+          "--tempo", type=float, default=120.0,
+          help="メトロノームテンポ（BPM）"
+      )
       args = ap.parse_args()
 
       midi_dir = Path(args.midi_dir)
-      mids = sorted(midi_dir.glob("*_basic_pitch.mid"))
-      if not mids:
-          raise SystemExit(f"No MIDI files found in {midi_dir}")
+      lyrics_json = Path(args.lyrics_json)
+      out_xml = Path(args.output)
 
-      words = load_words(Path(args.lyrics_json))
+      print(f"[align] MIDI dir   : {midi_dir}")
+      print(f"[align] Lyrics json: {lyrics_json}")
+      print(f"[align] Output XML : {out_xml}")
 
-      sc = stream.Score()
-      sc.insert(0, tempo.MetronomeMark(number=args.tempo))
-      sc.insert(0, meter.TimeSignature("4/4"))
+      # 1) MIDI → Score (各パート単純化)
+      score, stem_names = build_score_from_midis(midi_dir)
+      print(f"[align] parts      : {stem_names}")
 
-      parts_added = 0
-      for mpath in mids:
-          stem = guess_stem_name(mpath)
-          part_stream = parse_midi_first_part(mpath)
-          try:
-              inst = instrument.fromString(stem.capitalize())
-          except Exception:
-              inst = instrument.Instrument()
-              inst.instrumentName = stem.capitalize()
-          part_stream.insert(0, inst)
-          if stem == "vocals":
-              attach_lyrics_to_part(part_stream, words, qpm=args.tempo)
-          sc.append(part_stream)
-          parts_added += 1
+      # 2) 歌詞: 一番上のパートを vocals とみなす
+      words = load_lyrics(lyrics_json)
+      if words and len(score.parts) > 0:
+          print("[align] attaching lyrics to first part (assumed vocals)")
+          assign_lyrics_sequential(score.parts[0], words)
+      else:
+          print("[align] no lyrics attached (no words or no parts)")
 
-      if parts_added == 0:
-          raise SystemExit("No parsable MIDI parts.")
+      # 3) スコア全体を 4/4 の単純小節に正規化
+      print("[align] normalizing score …")
+      score = normalize_score(score, time_signature="4/4", tempo=args.tempo)
 
-      out_path = Path(args.output)
-      out_path.parent.mkdir(parents=True, exist_ok=True)
-      sc.write("musicxml", fp=str(out_path))
-      print(f"[xml] wrote MusicXML: {out_path}")
+      # 4) MusicXML 出力
+      out_xml.parent.mkdir(parents=True, exist_ok=True)
+      score.write("musicxml", fp=str(out_xml))
+      print(f"[align] wrote MusicXML: {out_xml}")
+
 
   if __name__ == "__main__":
       main()
 #+end_src
 
-* macOS: env/macOS
+* macOS 用環境（env/macOS）
+
 ** Makefile
 #+begin_src makefile :tangle env/macOS/Makefile
-  VENV := .venv
-  PY   := $(VENV)/bin/python
-  PIP  := $(VENV)/bin/pip
-  AUDIO ?= foo.wav
+# music2score — macOS Makefile (pyenv 3.10 auto-check + LilyPond)
 
-  MSCORE_BIN := /Applications/MuseScore\ 4.app/Contents/MacOS/mscore
-  export MSCORE_BIN
+VENV := .venv
+PY   := $(VENV)/bin/python
+PIP  := $(VENV)/bin/pip
+AUDIO ?= foo.wav
 
-  all: install
+# LilyPond is primary
+LILYPOND := $(shell command -v lilypond)
 
-  # venv がなければ作る
-  $(VENV)/bin/activate:
-  	python3 -m venv $(VENV)
+# ----------------------------------------
+# Python version settings
+# ----------------------------------------
+PYENV_PY := $(shell command -v pyenv >/dev/null 2>&1 && \
+                 pyenv versions --bare | grep '^3\.10' | sort -V | tail -1)
 
-  install: $(VENV)/bin/activate
-  	$(PY) -m pip install -U pip
-  	$(PIP) install -r ../common/requirements.txt
+ifeq ($(PYENV_PY),)
+  HAS_PYENV := $(shell command -v pyenv >/dev/null 2>&1 && echo yes || echo no)
+  ifeq ($(HAS_PYENV),yes)
+    PYTHON_BIN := $(HOME)/.pyenv/versions/3.10.14/bin/python3
+  else
+    PYTHON_BIN := python3
+  endif
+else
+  PYTHON_BIN := $(HOME)/.pyenv/versions/$(PYENV_PY)/bin/python3
+endif
 
-  run: $(VENV)/bin/activate
-  	# venv の bin を PATH に足してからシェルスクリプトを bash で実行
-  	PATH="$(VENV)/bin:$$PATH" \
-  	MODELS="htdemucs htdemucs_6s" \
-  	ENSEMBLE_METHOD=tmean \
-  	TMEAN_ALPHA=0.1 \
-  	bash ../common/scripts/process.sh "../input/$(AUDIO)"
+# ----------------------------------------
+# Targets
+# ----------------------------------------
+
+all: install
+
+check-pyenv:
+	@echo ">>> Checking pyenv and Python 3.10..."
+	@if command -v pyenv >/dev/null 2>&1; then \
+		if ! pyenv versions --bare | grep -q '^3\.10'; then \
+			echo "  - Installing Python 3.10.14..."; \
+			pyenv install -s 3.10.14; \
+		else \
+			echo "  - Python 3.10 already installed."; \
+		fi \
+	else \
+		echo "  - pyenv not found. Using system python3."; \
+	fi
+
+$(VENV)/bin/activate: check-pyenv
+	@echo ">>> Creating venv with: $(PYTHON_BIN)"
+	$(PYTHON_BIN) -m venv $(VENV)
+
+install: $(VENV)/bin/activate
+	@echo ">>> Installing dependencies"
+	$(PY) -m pip install -U pip
+	$(PIP) install -r ../common/requirements.txt
+
+run: $(VENV)/bin/activate
+	@echo ">>> Running pipeline"
+	PATH="$(VENV)/bin:$$PATH" \
+	ENSEMBLE_METHOD=tmean \
+	TMEAN_ALPHA=0.1 \
+	bash ../common/scripts/process.sh "../input/$(AUDIO)"
 #+end_src
 
-* WSL2
+* WSL2 用環境（env/wsl2）
 ** Makefile
 #+begin_src makefile :tangle env/wsl2/Makefile
   VENV := .venv
@@ -588,7 +880,8 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
   	ENSEMBLE_METHOD=median \
   	bash ../common/scripts/process.sh "../input/$(AUDIO)"
 #+end_src
-* Docker
+
+* Docker 用環境（省略・LilyPond パッケージ入りイメージを使う）
 ** Dockerfile
 #+begin_src dockerfile :tangle env/docker/Dockerfile
   FROM python:3.10-slim
@@ -639,6 +932,22 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
       command: ["/opt/music2score/env/common/scripts/process.sh", "/input/foo.wav"]
 #+end_src
 
+* 使い方メモ
+
+1. Org を保存後、M-x =org-babel-tangle= でファイル生成
+2. macOS:
+   - =cd env/macOS=
+   - =make install=
+   - =make run AUDIO=ここはどこなのか.wav=
+3. WSL2:
+   - apt install lilypond
+   - =make run=
+4. Docker:
+   - LilyPond を含むイメージをビルド、実行
+5. 出力:
+   - =out/score/score.pdf=
+
+PDF は LilyPond により高品質に出力されます。
 * Developer Guide
 
 ** データフロー（directory-level）
@@ -657,46 +966,29 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
 
 ** シーケンス図（macOS 例）
 #+begin_src mermaid
-  sequenceDiagram
-    participant User
-    participant Make
-    participant SH as "process.sh"
-    participant Dem as "demucs"
-    participant Ens as "ensemble"
-    participant BP as "basic-pitch"
-    participant ASR as "ASR"
-    participant XML as "XML builder"
-    participant MS as "mscore"
+  sequenceDiagram participant User participant Make participant SH as
+    "process.sh" participant Dem as "demucs" participant Ens as
+    "ensemble" participant BP as "basic-pitch" participant ASR as "ASR"
+    participant XML as "XML builder" participant MS as "mscore"
 
-    User->>Make: make run
-    Make->>SH: process.sh foo.wav
-    SH->>Dem: run demucs (multi-model)
-    Dem-->>SH: stems
-    SH->>Ens: ensemble_stems.py
-    Ens-->>SH: fused stems
-    loop stems
-      SH->>BP: basic-pitch
-      BP-->>SH: midi
-    end
-    SH->>ASR: asr.py
-    ASR-->>SH: lyrics_words.json
-    SH->>XML: align_musicxml.py
-    XML-->>SH: score.musicxml
-    SH->>MS: mscore -o score.pdf
-    MS-->>SH: score.pdf
-    SH-->>User: DONE
+    User->>Make: make run Make->>SH: process.sh foo.wav SH->>Dem: run
+    demucs (multi-model) Dem-->>SH: stems SH->>Ens: ensemble_stems.py
+    Ens-->>SH: fused stems loop stems SH->>BP: basic-pitch BP-->>SH:
+    midi end SH->>ASR: asr.py ASR-->>SH: lyrics_words.json SH->>XML:
+    align_musicxml.py XML-->>SH: score.musicxml SH->>MS: mscore -o
+    score.pdf MS-->>SH: score.pdf SH-->>User: DONE
 #+end_src
 
 * 拡張ポイント
 
 ** 追加しやすい箇所（表）
-| 項目 | 変更地点 | 備考 |
-|------+-----------+-------|
-| Demucs モデル追加 | Makefile の MODELS | ensemble_stems.py 修正不要 |
-| アンサンブル手法 | ENSEMBLE_METHOD | median/tmean |
-| ステム種追加 | ensemble_stems.py, process.sh, align_musicxml.py | 3 箇所必須 |
-| 歌詞推定モデル変更 | asr.py | Whisper variant など |
-| 拍子・テンポ可変 | align_musicxml.py | 3/4, ritardando 等 |
+| 項目             | 変更地点                                        | 備考                      |
+|-----------------+------------------------------------------------+--------------------------|
+| Demucs モデル追加 | Makefile の MODELS                             | ensemble_stems.py 修正不要 |
+| アンサンブル手法   | ENSEMBLE_METHOD                                 | median/tmean             |
+| ステム種追加      | ensemble_stems.py, process.sh, align_musicxml.py | 3 箇所必須                |
+| 歌詞推定モデル変更 | asr.py                                         | Whisper variant など      |
+| 拍子・テンポ可変   | align_musicxml.py                               | 3/4, ritardando 等       |
 
 * トラブルシュート
 ** Demucs が落ちる
@@ -729,9 +1021,7 @@ Demucs → Ensemble → Basic Pitch → faster-whisper → music21 → MuseScore
    #+end_src
 4. Docker:
    #+begin_src sh
-     cd env/docker
-     make build
-     make run
+     cd env/docker make build make run
    #+end_src
 
 * Appendix: music2score 開発ポリシー
