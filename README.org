@@ -790,67 +790,70 @@ music2score は、任意の音源ファイルから次の成果物を自動生�
 
 ** Makefile
 #+begin_src makefile :tangle env/macOS/Makefile
-# music2score — macOS Makefile (pyenv 3.10 auto-check + LilyPond)
+  # music2score — macOS Makefile (pyenv 3.10 auto-check + LilyPond)
 
-VENV := .venv
-PY   := $(VENV)/bin/python
-PIP  := $(VENV)/bin/pip
-AUDIO ?= foo.wav
+  VENV := .venv
+  PY   := $(VENV)/bin/python
+  PIP  := $(VENV)/bin/pip
+  AUDIO ?= foo.wav
 
-# LilyPond is primary
-LILYPOND := $(shell command -v lilypond)
+  # LilyPond is primary
+  LILYPOND := $(shell command -v lilypond)
 
-# ----------------------------------------
-# Python version settings
-# ----------------------------------------
-PYENV_PY := $(shell command -v pyenv >/dev/null 2>&1 && \
-                 pyenv versions --bare | grep '^3\.10' | sort -V | tail -1)
+  # ----------------------------------------
+  # Python version settings
+  # ----------------------------------------
+  PYENV_PY := $(shell command -v pyenv >/dev/null 2>&1 && \
+                   pyenv versions --bare | grep '^3\.10' | sort -V | tail -1)
 
-ifeq ($(PYENV_PY),)
-  HAS_PYENV := $(shell command -v pyenv >/dev/null 2>&1 && echo yes || echo no)
-  ifeq ($(HAS_PYENV),yes)
-    PYTHON_BIN := $(HOME)/.pyenv/versions/3.10.14/bin/python3
+  ifeq ($(PYENV_PY),)
+    HAS_PYENV := $(shell command -v pyenv >/dev/null 2>&1 && echo yes || echo no)
+    ifeq ($(HAS_PYENV),yes)
+      PYTHON_BIN := $(HOME)/.pyenv/versions/3.10.14/bin/python3
+    else
+      PYTHON_BIN := python3
+    endif
   else
-    PYTHON_BIN := python3
+    PYTHON_BIN := $(HOME)/.pyenv/versions/$(PYENV_PY)/bin/python3
   endif
-else
-  PYTHON_BIN := $(HOME)/.pyenv/versions/$(PYENV_PY)/bin/python3
-endif
 
-# ----------------------------------------
-# Targets
-# ----------------------------------------
+  # ----------------------------------------
+  # Targets
+  # ----------------------------------------
 
-all: install
+  all: install
 
-check-pyenv:
-	@echo ">>> Checking pyenv and Python 3.10..."
-	@if command -v pyenv >/dev/null 2>&1; then \
-		if ! pyenv versions --bare | grep -q '^3\.10'; then \
-			echo "  - Installing Python 3.10.14..."; \
-			pyenv install -s 3.10.14; \
-		else \
-			echo "  - Python 3.10 already installed."; \
-		fi \
-	else \
-		echo "  - pyenv not found. Using system python3."; \
-	fi
+  check-pyenv:
+  	@echo ">>> Checking pyenv and Python 3.10..."
+  	@if command -v pyenv >/dev/null 2>&1; then \
+  		if ! pyenv versions --bare | grep -q '^3\.10'; then \
+  			echo "  - Installing Python 3.10.14..."; \
+  			pyenv install -s 3.10.14; \
+  		else \
+  			echo "  - Python 3.10 already installed."; \
+  		fi \
+  	else \
+  		echo "  - pyenv not found. Using system python3."; \
+  	fi
 
-$(VENV)/bin/activate: check-pyenv
-	@echo ">>> Creating venv with: $(PYTHON_BIN)"
-	$(PYTHON_BIN) -m venv $(VENV)
+  $(VENV)/bin/activate: check-pyenv
+  	@echo ">>> Creating venv with: $(PYTHON_BIN)"
+  	$(PYTHON_BIN) -m venv $(VENV)
 
-install: $(VENV)/bin/activate
-	@echo ">>> Installing dependencies"
-	$(PY) -m pip install -U pip
-	$(PIP) install -r ../common/requirements.txt
+  install: $(VENV)/bin/activate
+  	@echo ">>> Installing dependencies"
+  	$(PY) -m pip install -U pip
+  	$(PIP) install -r ../common/requirements.txt
 
-run: $(VENV)/bin/activate
-	@echo ">>> Running pipeline"
-	PATH="$(VENV)/bin:$$PATH" \
-	ENSEMBLE_METHOD=tmean \
-	TMEAN_ALPHA=0.1 \
-	bash ../common/scripts/process.sh "../input/$(AUDIO)"
+  run: $(VENV)/bin/activate
+  	@echo ">>> Running pipeline"
+  	PATH="$(VENV)/bin:$$PATH" \
+  	ENSEMBLE_METHOD=tmean \
+  	TMEAN_ALPHA=0.1 \
+  	bash ../common/scripts/process.sh "../input/$(AUDIO)"
+
+  clean:
+  	rm -rf $(VENV)
 #+end_src
 
 * WSL2 用環境（env/wsl2）
