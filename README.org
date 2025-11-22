@@ -108,128 +108,83 @@ music2score は、任意の音源ファイルから次の成果物を自動生�
 
 ** process.sh
 #+begin_src sh :tangle env/common/scripts/process.sh :shebang "#!/usr/bin/env bash"
-  set -euo pipefail
-  export TORCHAUDIO_USE_SOUNDFILE=1
+  set -euo pipefail export TORCHAUDIO_USE_SOUNDFILE=1
 
-  AUDIO_IN="${1:-}"
-  : "${AUDIO_IN:?Usage: $0 <audio.(wav|aif|aiff|aifc|mp3|flac)>}"
+  AUDIO_IN="${1:-}" : "${AUDIO_IN:?Usage: $0
+  <audio.(wav|aif|aiff|aifc|mp3|flac)>}"
 
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-  WORK_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-  OUT_DIR="$WORK_DIR/out"
-  TMP_DIR="$OUT_DIR/tmp_audio"
-  STEM_ROOT="$OUT_DIR/stems"
-  ENS_DIR="$OUT_DIR/stems_ens"
-  MIDI_DIR="$OUT_DIR/midi"
-  LYRICS_DIR="$OUT_DIR/lyrics"
-  SCORE_DIR="$OUT_DIR/score"
-  SCORE_XML="$SCORE_DIR/score.musicxml"
-  SCORE_LY="$SCORE_DIR/score.ly"
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" WORK_DIR="$(cd
+  "$SCRIPT_DIR/../.." && pwd)" OUT_DIR="$WORK_DIR/out"
+  TMP_DIR="$OUT_DIR/tmp_audio" STEM_ROOT="$OUT_DIR/stems"
+  ENS_DIR="$OUT_DIR/stems_ens" MIDI_DIR="$OUT_DIR/midi"
+  LYRICS_DIR="$OUT_DIR/lyrics" SCORE_DIR="$OUT_DIR/score"
+  SCORE_XML="$SCORE_DIR/score.musicxml" SCORE_LY="$SCORE_DIR/score.ly"
   SCORE_PDF="$SCORE_DIR/score.pdf"
 
   MODELS="${MODELS:-htdemucs}"
   ENSEMBLE_METHOD="${ENSEMBLE_METHOD:-median}"
   TMEAN_ALPHA="${TMEAN_ALPHA:-0.1}"
 
-  mkdir -p "$OUT_DIR" "$TMP_DIR" "$STEM_ROOT" "$ENS_DIR" \
-    "$MIDI_DIR" "$LYRICS_DIR" "$SCORE_DIR"
+  mkdir -p "$OUT_DIR" "$TMP_DIR" "$STEM_ROOT" "$ENS_DIR" \ "$MIDI_DIR"
+    "$LYRICS_DIR" "$SCORE_DIR"
 
-  # 0. Normalize
-  BASE="$(basename "$AUDIO_IN")"
-  BASE_NOEXT="${BASE%.*}"
-  WAV_IN="$TMP_DIR/${BASE_NOEXT}.wav"
-  echo "[normalize] $AUDIO_IN -> $WAV_IN"
-  ffmpeg -y -i "$AUDIO_IN" -ac 2 -ar 44100 -sample_fmt s16 \
-    "$WAV_IN" >/dev/null 2>&1
+  # 0. Normalize BASE="$(basename "$AUDIO_IN")" BASE_NOEXT="${BASE%.*}"
+  WAV_IN="$TMP_DIR/${BASE_NOEXT}.wav" echo "[normalize] $AUDIO_IN ->
+  $WAV_IN" ffmpeg -y -i "$AUDIO_IN" -ac 2 -ar 44100 -sample_fmt s16 \
+  "$WAV_IN" >/dev/null 2>&1
 
-  # 1. Parse models
-  MODELS_SANE="$(printf "%s" "$MODELS" | tr '、,' ' ' | tr -s '[:space:]' ' ')"
-  read -r -a MODEL_ARR <<< "$MODELS_SANE"
-  [ "${#MODEL_ARR[@]}" -eq 0 ] && MODEL_ARR=(htdemucs)
-  echo "[models] parsed: ${MODEL_ARR[*]}"
+  # 1. Parse models MODELS_SANE="$(printf "%s" "$MODELS" | tr '、,' ' '
+  | tr -s '[:space:]' ' ')" read -r -a MODEL_ARR <<< "$MODELS_SANE" [
+  "${#MODEL_ARR[@]}" -eq 0 ] && MODEL_ARR=(htdemucs) echo "[models]
+  parsed: ${MODEL_ARR[*]}"
 
-  # 2. Demucs
-  for m in "${MODEL_ARR[@]}"; do
-    echo "[demucs] model=$m"
-    demucs -n "$m" -o "$STEM_ROOT" "$WAV_IN"
-  done
+  # 2. Demucs for m in "${MODEL_ARR[@]}"; do echo "[demucs] model=$m"
+  demucs -n "$m" -o "$STEM_ROOT" "$WAV_IN" done
 
-  # 3. Ensemble
-  if [ "${#MODEL_ARR[@]}" -ge 2 ]; then
-    echo "[ensemble] method=$ENSEMBLE_METHOD alpha=$TMEAN_ALPHA"
-    python "$SCRIPT_DIR/ensemble_stems.py" \
-      --models "$MODELS_SANE" \
-      --stem-root "$STEM_ROOT" \
-      --track "$BASE_NOEXT" \
-      --out-dir "$ENS_DIR" \
-      --method "$ENSEMBLE_METHOD" \
-      --tmean-alpha "$TMEAN_ALPHA"
-    STEM_DIR="$ENS_DIR/$BASE_NOEXT"
-  else
-    STEM_DIR="$STEM_ROOT/${MODEL_ARR[0]}/$BASE_NOEXT"
-  fi
-  echo "[stems] using $STEM_DIR"
+  # 3. Ensemble if [ "${#MODEL_ARR[@]}" -ge 2 ]; then echo "[ensemble]
+  method=$ENSEMBLE_METHOD alpha=$TMEAN_ALPHA" python
+  "$SCRIPT_DIR/ensemble_stems.py" \ --models "$MODELS_SANE" \
+  --stem-root "$STEM_ROOT" \ --track "$BASE_NOEXT" \ --out-dir
+  "$ENS_DIR" \ --method "$ENSEMBLE_METHOD" \ --tmean-alpha
+  "$TMEAN_ALPHA" STEM_DIR="$ENS_DIR/$BASE_NOEXT" else
+  STEM_DIR="$STEM_ROOT/${MODEL_ARR[0]}/$BASE_NOEXT" fi echo "[stems]
+  using $STEM_DIR"
 
-  # 4. Basic Pitch
-  mkdir -p "$MIDI_DIR"
-  bp_conv() {
-    [ -f "$1" ] || return 0
-    echo "[basic-pitch] $1"
-    basic-pitch --save-midi --no-melodia "$MIDI_DIR" "$1" >/dev/null 2>&1 || true
-  }
-  for stem in vocals bass drums other guitar piano; do
-    bp_conv "$STEM_DIR/$stem.wav"
-  done
+  # 4. Basic Pitch mkdir -p "$MIDI_DIR" bp_conv() { [ -f "$1" ] ||
+  return 0 echo "[basic-pitch] $1" basic-pitch --save-midi --no-melodia
+  "$MIDI_DIR" "$1" >/dev/null 2>&1 || true } for stem in vocals bass
+  drums other guitar piano; do bp_conv "$STEM_DIR/$stem.wav" done
 
-  # 5. ASR
-  LYRICS_JSON="$LYRICS_DIR/lyrics_words.json"
-  ASR_SRC="$STEM_DIR/vocals.wav"
-  [ ! -f "$ASR_SRC" ] && ASR_SRC="$WAV_IN"
+  # 5. ASR LYRICS_JSON="$LYRICS_DIR/lyrics_words.json"
+  ASR_SRC="$STEM_DIR/vocals.wav" [ ! -f "$ASR_SRC" ] &&
+  ASR_SRC="$WAV_IN"
 
-  echo "[asr] $ASR_SRC"
-  PYTHONIOENCODING=utf-8 \
-  ASR_SRC="$ASR_SRC" \
-  LYRICS_JSON="$LYRICS_JSON" \
-  python "$SCRIPT_DIR/asr.py"
+  echo "[asr] $ASR_SRC" PYTHONIOENCODING=utf-8 \ ASR_SRC="$ASR_SRC" \
+  LYRICS_JSON="$LYRICS_JSON" \ python "$SCRIPT_DIR/asr.py"
 
-  # 6. MusicXML
-  echo "[xml] -> $SCORE_XML"
-  python "$SCRIPT_DIR/align_musicxml.py" \
-    --midi_dir "$MIDI_DIR" \
-    --lyrics_json "$LYRICS_JSON" \
-    --output "$SCORE_XML" \
-    --tempo 120
+  # 6. MusicXML echo "[xml] -> $SCORE_XML" python
+  "$SCRIPT_DIR/align_musicxml.py" \ --midi_dir "$MIDI_DIR" \
+  --lyrics_json "$LYRICS_JSON" \ --output "$SCORE_XML" \ --tempo 120
 
-  # 7. MusicXML → LilyPond (musicxml2ly)
-  echo "[ly] musicxml2ly -> $SCORE_LY"
-  musicxml2ly "$SCORE_XML" -o "$SCORE_LY"
+  # 7. MusicXML → LilyPond (musicxml2ly) echo "[ly] musicxml2ly ->
+  $SCORE_LY" musicxml2ly "$SCORE_XML" -o "$SCORE_LY"
 
-  # 8. score.ly の先頭に include を挿入
-  cp "$SCRIPT_DIR/lilypond_include.ily" "$SCORE_DIR/lilypond_include.ily"
+  # 8. score.ly の先頭に include を挿入cp
+  "$SCRIPT_DIR/lilypond_include.ily" "$SCORE_DIR/lilypond_include.ily"
 
-  # sed の代わりに printf + cat で安全に挿入
-  TMP_LY="${SCORE_LY}.tmp"
-  printf '\\include "lilypond_include.ily"\n' > "$TMP_LY"
-  cat "$SCORE_LY" >> "$TMP_LY"
-  mv "$TMP_LY" "$SCORE_LY"
+  # sed の代わりに printf + cat で安全に挿入TMP_LY="${SCORE_LY}.tmp"
+  printf '\\include "lilypond_include.ily"\n' > "$TMP_LY" cat
+  "$SCORE_LY" >> "$TMP_LY" mv "$TMP_LY" "$SCORE_LY"
 
-  # 9. sanitize（必要に応じて後処理を挟みたいならここ）
-  # 例: 独自の sanitize_ly.py 等を挟みたいとき:
-  # python "$SCRIPT_DIR/sanitize_ly.py" "$SCORE_LY"
-  # echo "[sanitize-ly] sanitized: $SCORE_LY"
+  # 9. sanitize（必要に応じて後処理を挟みたいならここ）例: 独自の
+  # sanitize_ly.py 等を挟みたいとき: python "$SCRIPT_DIR/sanitize_ly.py"
+  # "$SCORE_LY" echo "[sanitize-ly] sanitized: $SCORE_LY"
 
-  # 10. PDF (LilyPond)
-  echo "[pdf] lilypond -> $SCORE_PDF"
-  (
-    cd "$SCORE_DIR"
-    lilypond -o "score" "score.ly"
-  )
+  # 10. PDF (LilyPond) echo "[pdf] lilypond -> $SCORE_PDF" ( cd
+  "$SCORE_DIR" lilypond -o "score" "score.ly" )
 
-  echo "DONE"
-  echo " - Stems    : $STEM_DIR"
-  echo " - MusicXML : $SCORE_XML"
-  echo " - LilyPond : $SCORE_LY"
-  echo " - PDF      : $SCORE_PDF"
+  echo "DONE" echo " - Stems : $STEM_DIR" echo " - MusicXML :
+  $SCORE_XML" echo " - LilyPond : $SCORE_LY" echo " - PDF : $SCORE_PDF"
 #+end_src
 
 ** ensemble_stems.py
